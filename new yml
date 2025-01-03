@@ -1,2 +1,130 @@
-name
+---
+- name: RHEL 7 to RHEL 8 Migration
+  hosts: all
+  become: yes
+  tasks:
 
+    - name: Verify current RHEL version
+      command: cat /etc/redhat-release
+      register: rhel_version
+
+    - name: Check if the system is running RHEL 7
+      fail:
+        msg: "This playbook only supports RHEL 7 systems."
+      when: "'Red Hat Enterprise Linux Server release 7' not in rhel_version.stdout"
+
+    - name: Perform pre-upgrade backup (filesystem snapshot or backup tool)
+      shell: |
+        mkdir -p /backup/pre_migration
+        tar czf /backup/pre_migration/backup_$(date +%F).tar.gz /etc /var /home /boot /opt
+      args:
+        warn: false
+      tags:
+        - backup
+
+    - name: Backup critical system configurations
+      shell: |
+        mkdir -p /backup/critical_configs
+        cp -r /etc/sysconfig /etc/network /etc/hosts /etc/fstab /backup/critical_configs
+      tags:
+        - backup
+
+    - name: Install leapp and pre-upgrade tools
+      package:
+        name:
+          - leapp
+          - leapp-repository
+          - leapp-data
+        state: present
+
+    - name: Ensure RHEL 8 repositories are enabled
+      shell: |
+        subscription-manager repos --disable="*" && \
+        subscription-manager repos --enable="rhel-8-for-x86_64-baseos-rpms" \
+        --enable="rhel-8-for-x86_64-appstream-rpms"
+      register: repo_setup
+
+    - name: Confirm repositories enabled
+      fail:
+        msg: "Failed to enable RHEL 8 repositories."
+      when: repo_setup.rc != 0
+
+    - name: Run leapp pre-upgrade check
+      shell: |
+        leapp preupgrade
+      register: leapp_preupgrade
+
+    - name: Check for pre-upgrade warnings or blockers
+      debug:
+        var: leapp_preupgrade.stdout_lines
+
+    - name: Fail if pre-upgrade blockers are detected
+      fail:
+        msg: "Pre-upgrade blockers found. Please resolve these issues before proceeding."
+      when: "'Blocking' in leapp_preupgrade.stdout"
+
+    - name: Migrate network configurations if needed
+      shell: |
+        if [ -f /etc/sysconfig/network-scripts/ifcfg-ens33 ]; then
+          mv /etc/sysconfig/network-scripts/ifcfg-ens33 /etc/sysconfig/network-scripts/ifcfg-ens33.bak
+          nmcli con add type ethernet con-name ens33 ifname ens33
+        fi
+      tags:
+        - network
+
+    - name: Perform leapp upgrade
+      shell: |
+        leapp upgrade
+      tags:
+        - upgrade
+
+    - name: Update GRUB configuration for boot migration
+      shell: |
+        grub2-mkconfig -o /boot/grub2/grub.cfg
+      tags:
+        - boot
+
+    - name: Reboot system
+      reboot:
+        msg: "Rebooting after leapp upgrade step."
+        pre_reboot_delay: 30
+
+    - name: Verify RHEL 8 installation after reboot
+      command: cat /etc/redhat-release
+      register: post_upgrade_version
+
+    - name: Ensure the system is running RHEL 8
+      fail:
+        msg: "Migration failed. The system is not running RHEL 8."
+      when: "'Red Hat Enterprise Linux release 8' not in post_upgrade_version.stdout"
+
+    - name: Clean up old packages and configurations
+      shell: dnf autoremove -y
+      tags:
+        - cleanup
+
+    - name: Verify critical services are running
+      service_facts:
+      tags:
+        - verify
+
+    - name: Restart important services
+      service:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - sshd
+        - firewalld
+        - network
+      tags:
+        - verify
+
+    - name: Run post-upgrade validation scripts
+      shell: |
+        rhel8-validation --run
+      tags:
+        - verify
+
+    - name: Provide migration summary
+      debug:
+        msg: "Migration to RHEL 8 completed successfully on {{ inventory_hostname }}."
