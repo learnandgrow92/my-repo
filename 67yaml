@@ -13,4 +13,4 @@
 - include: playbooks/upgrade.yml
 - include: playbooks/bootmigration.yml
 - include: playbooks/postupgrade.yml
-- include: playbooks/uim.yml
+- include: playbooks/ldap.yml
