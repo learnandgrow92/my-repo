@@ -1,0 +1,16 @@
+- name: Safeguards
+  hosts: all
+  gather_facts: true
+  tasks:
+  - name: "Safeguards - Test if target system is on RHEL 6"
+    fail: msg="System is not on rhel 6.10"
+    when: (ansible_distribution == "Red Hat Enterprise Linux"  and ansible_distribution_major_version | int != 6 and ansible_distribution_minor_version != 10)
+
+- include: playbooks/rootauthkey.yml
+- include: playbooks/sysconfigback.yml
+- include: playbooks/satellite.yml
+- include: playbooks/package.yml
+- include: playbooks/upgrade.yml
+- include: playbooks/bootmigration.yml
+- include: playbooks/postupgrade.yml
+- include: playbooks/uim.yml
